@@ -133,7 +133,7 @@ fileLoader.onload = function(event) {
           parseInt(map.getZoom(),10))
         .then(function(drivingRoute) {
           renderCoordinates(drivingRoute.coordinates,'route'+wayPointIndex);
-          document.getElementById('route-item').innerHTML = '<b>NÄSTA STOP: ' + currentRoute.routeItems[wayPointIndex+1].order + '</b>';
+          document.getElementById('route-item').innerHTML = '<b>NÄSTA STOPP: ' + currentRoute.routeItems[wayPointIndex+1].order + '</b>';
           drivingSimulator.simulate(drivingRoute).then(function() {
             lastRenderedInstructionIndex = -1;
             wayPointIndex++;
@@ -147,7 +147,7 @@ fileLoader.onload = function(event) {
 
 function renderRouteInfo(currentRoute) {
   console.log(currentRoute);
-  document.getElementById('route').innerHTML = 'ROUTE:<br><b>' + currentRoute.name + '</b><br>' + currentRoute.routeItems.length + ' stop';
+  document.getElementById('route').innerHTML = 'RUTT:<br><b>' + currentRoute.name + '</b><br>' + currentRoute.routeItems.length + ' stop';
 }
 
 // Set status text on page, mostly for debugging
