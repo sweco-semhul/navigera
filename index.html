@@ -36,7 +36,7 @@
   <p id="simulate-container"></p><p id="gps-container"></p>
   <p id="route"></p>
   <p id="route-item"></p>
-  <p id="status">Drop decrypted route XML file here</p>
+  <p id="status">Drop decrypted route XML file here<br><br>or<br><br></p>
   <p id="instruction"></p>
 </div>
 <script>
@@ -76,6 +76,9 @@ var fileLoader = new FileLoader({
   statusReporter: renderStatus,
   drop: {
     target: 'panel'
+  },
+  pick: {
+    target: 'status'
   }
 });
 
