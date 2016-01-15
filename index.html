@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset='utf-8' />
+    <title></title>
+    <meta name='viewport' content='initial-scale=1,maximum-scale=1,user-scalable=no' />
+    <script src='//api.tiles.mapbox.com/mapbox-gl-js/v0.12.2/mapbox-gl.js'></script>
+    <script src='//api.tiles.mapbox.com/mapbox.js/plugins/turf/v2.0.0/turf.min.js'></script>
+    <script src='config.js'></script>
+    <script src='js/FileLoader.js'></script>
+    <script src='js/Parser.js'></script>
+    <script src='js/Speaker.js'></script>
+    <script src='js/DrivingSimulator.js'></script>
+    <script src='js/OSRMFetcher.js'></script>
+    <script src='js/GPSTracker.js'></script>
+    <link href='//api.tiles.mapbox.com/mapbox-gl-js/v0.12.2/mapbox-gl.css' rel='stylesheet' />
+    <style>
+        body { margin:0; padding:0; font-family: Verdana;}
+        #map { position:absolute; top:0; bottom:0; width: 80%; }
+        #panel.hover { border: 10px dashed #333; box-sizing: border-box;}
+        #panel {
+          padding: 20px;
+          position: absolute;
+          top: 0;
+          right: 0;
+          width: 20%;
+          height: 100%;
+          background-color: #fff
+        }
+    </style>
+</head>
+<body>
+
+<div id="map"></div>
+<div id="panel">
+  <p id="simulate-container"></p><p id="gps-container"></p>
+  <p id="route"></p>
+  <p id="route-item"></p>
+  <p id="status">Drop decrypted route XML file here</p>
+  <p id="instruction"></p>
+</div>
+<script>
+var
+  OSRM_SERVICE_URL    = OSRM_SERVICE_URL || getUrlParams()['osrm'] || '',
+  MAPBOX_ACCESS_TOKEN = MAPBOX_ACCESS_TOKEN || getUrlParams()['token'] || '',
+  SPEAK = SPEAK || getUrlParams()['speak'] || false;
+
+mapboxgl.accessToken = MAPBOX_ACCESS_TOKEN;
+var lastRenderedInstructionIndex = -1;
+
+// Initiate map
+var map = new mapboxgl.Map({
+    container: 'map',
+    style: 'mapbox://styles/mapbox/streets-v8',
+    center: [18.045609,59.102956],
+    zoom: 17,
+    pitch: 75
+});
+
+// Initiate speaker
+var speaker = new Speaker({
+  voiceNr: 23,
+  lang: 'sv-SE'
+});
+
+var drivingSimulator = new DrivingSimulator({
+  statusReporter: renderStatus,
+  target: 'simulate-container',
+  map: map
+});
+
+
+var parser = new Parser({ statusReporter: renderStatus });
+
+var fileLoader = new FileLoader({
+  statusReporter: renderStatus,
+  drop: {
+    target: 'panel'
+  }
+});
+
+var osrmFetcher = new OSRMFetcher({
+    statusReporter: renderStatus,
+    serviceURL: OSRM_SERVICE_URL
+});
+
+var gpsTracker = new GPSTracker({
+  statusReporter: renderStatus,
+  target: 'gps-container',
+  map: map
+});
+
+fileLoader.onload = function(event) {
+  renderStatus('File loaded, trying to parse');
+  parser.parse(event.target.result).then(function(currentRoute) {
+    var wayPointIndex = 0;
+    var currentDrivingRoute;
+
+    renderStatus('Route parsed, trying to render route');
+    renderRouteInfo(currentRoute);
+    renderCoordinates(currentRoute,'stop_point_items', 'stopPointItem');
+    renderCoordinates(currentRoute,'stop_points', 'stopPoint');
+
+
+    gpsTracker.positionUpdate = function(coordinate) {
+      drivingSimulator.disable();
+      console.log(coordinate);
+      //TODO do not always fetch new route, only update when coordinate near end of route?
+      if(true) {
+        osrmFetcher.fetch(
+            {easting: coordinate[0], northing: coordinate[1]},
+            currentRoute.routeItems[wayPointIndex].stopPoint,
+            parseInt(map.getZoom(),10))
+          .then(function(drivingRoute) {
+            currentDrivingRoute = drivingRoute;
+            renderCoordinates(drivingRoute.coordinates,'route'+wayPointIndex);
+            renderInstructions(drivingRoute, wayPointIndex);
+          });
+      }
+      //TODO check for nearest instruction and update
+    };
+    gpsTracker.enable();
+
+    drivingSimulator.atWaypoint = renderInstructions;
+    drivingSimulator.onStartSimulation = function() {
+      gpsTracker.disable();
+      if(parseInt(map.getZoom(),10) < 18) {
+          map.setZoom(18);
+      }
+      osrmFetcher.fetch(
+          currentRoute.routeItems[wayPointIndex].stopPoint,
+          currentRoute.routeItems[wayPointIndex+1].stopPoint,
+          parseInt(map.getZoom(),10))
+        .then(function(drivingRoute) {
+          renderCoordinates(drivingRoute.coordinates,'route'+wayPointIndex);
+          document.getElementById('route-item').innerHTML = '<b>NÄSTA STOP: ' + currentRoute.routeItems[wayPointIndex+1].order + '</b>';
+          drivingSimulator.simulate(drivingRoute).then(function() {
+            lastRenderedInstructionIndex = -1;
+            wayPointIndex++;
+            drivingSimulator.onStartSimulation();
+          });
+        });
+    }
+    drivingSimulator.enable();
+  });
+};
+
+function renderRouteInfo(currentRoute) {
+  console.log(currentRoute);
+  document.getElementById('route').innerHTML = 'ROUTE:<br><b>' + currentRoute.name + '</b><br>' + currentRoute.routeItems.length + ' stop';
+}
+
+// Set status text on page, mostly for debugging
+function renderStatus(txt) {
+  document.getElementById('status').innerHTML = txt;
+}
+
+// A simple HTML rendering of driving instructions
+function renderInstructions(route, index) {
+  route.instructions.forEach(function(inst) {
+    if(inst.index <= index+1 && inst.index > lastRenderedInstructionIndex) {
+      var mainInst = [
+        inst.type,
+        inst.road ? 'in på ' + inst.road : '',
+      ].join(' ');
+      if(SPEAK) {
+        speaker.say('Kör ' + mainInst);
+      }
+      document.getElementById('instruction').innerHTML = [
+        '<b>KÖR:</b><br>',
+        inst.direction + ',',
+        mainInst,
+        inst.distance ? inst.distance + ' meter' : '',
+        inst.time ? 'i ' + parseInt(inst.time/60,10) + ' min' : ''
+      ].join(' ');
+
+      console.log(inst);
+      lastRenderedInstructionIndex = inst.index;
+    }
+  });
+}
+
+// Add geojson layers to map. Rendered as Mapbox vector tiles with source and styling
+// See: https://www.mapbox.com/mapbox-gl-js/api/
+// TODO! rewrite
+function renderCoordinates(coordinatesOrRoute, name, type) {
+  var name = name || 'route';
+
+  if(type === 'stopPoint') {
+    var stopPoints = {
+      "type": "geojson",
+      "data": {
+        "type": "FeatureCollection",
+        "features": coordinatesOrRoute.routeItems.map(function(routeItem) {
+          return {
+              "type": "Feature",
+              "properties": {
+                "order": routeItem.order
+              },
+              "geometry": {
+                  "type": "Point",
+                  "coordinates": [routeItem.stopPoint.easting, routeItem.stopPoint.northing]
+              }
+          };
+        })
+      }
+    };
+    map.addSource(name, stopPoints);
+    map.addLayer({
+        "id": name + '_circle',
+        "type": "circle",
+        "source": name,
+        "paint": {
+            "circle-color": "#336699",
+            "circle-radius": 15
+        }
+    });
+    map.addLayer({
+        "id": name + '_symbol',
+        "type": "symbol",
+        "source": name,
+        "layout": {
+          "text-field": "{order}",
+          "text-size": 20,
+          "text-allow-overlap": true
+        },
+        "paint": {
+          "text-color": "#fff",
+          "text-halo-color": "#fff",
+          "text-halo-width": 0.5
+        }
+    });
+
+    map.fitBounds( turf.extent(stopPoints.data), {
+      linear: false
+    })
+  } else if(type === 'stopPointItem') {
+
+    map.addSource(name, {
+      "type": "geojson",
+      "data": {
+        "type": "FeatureCollection",
+        "features": [].concat.apply([],coordinatesOrRoute.routeItems.map(function(routeItem) { return routeItem.stopPointItems.map(function(stopPointItem, index) {
+          return {
+              "type": "Feature",
+              "properties": {
+                "index": routeItem.order + ':' + index+1,
+                "type": stopPointItem.type
+              },
+              "geometry": {
+                  "type": "Point",
+                  "coordinates": [stopPointItem.easting, stopPointItem.northing]
+              }
+          };
+        })}))
+      }
+    });
+    map.addLayer({
+        "id": name + '_circle',
+        "type": "circle",
+        "source": name,
+        "paint": {
+            "circle-color": "#333",
+            "circle-radius": 10,
+            "circle-opacity": 0.3
+        }
+    });
+    map.addLayer({
+        "id": name + '_symbol',
+        "type": "symbol",
+        "source": name,
+        "layout": {
+          "text-field": "{index}",
+          "text-size": 7,
+          "text-allow-overlap": true
+        },
+        "paint": {
+          "text-color": "#000",
+          "text-halo-color": "#000",
+          "text-halo-width": 0.1
+        }
+    });
+  } else {
+    map.addSource(name, {
+        "type": "geojson",
+        "data": {
+            "type": "Feature",
+            "properties": {},
+            "geometry": {
+                "type": "LineString",
+                "coordinates": coordinatesOrRoute
+            }
+        }
+      });
+      map.addLayer({
+          "id": name,
+          "type": "line",
+          "source": name,
+          "layout": {
+              "line-join": "round",
+              "line-cap": "round"
+          },
+          "paint": {
+              "line-color": "#00A8FC",
+              "line-width": 25,
+              "line-opacity": 0.4
+          }
+      });
+    }
+  }
+
+
+  function getUrlParams() {
+    var vars = {};
+    var parts = window.location.href.replace(/[?&]+([^=&]+)=([^&]*)/gi,
+    function(m,key,value) {
+      vars[key] = value;
+    });
+    return vars;
+  }
+
+</script>
+
+</body>
+</html>
